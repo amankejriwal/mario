@@ -1,0 +1,42 @@
+# Databricks App Configuration for Mario - AI Data Assistant
+name: Mario
+description: One home for your data query needs using NLP
+
+# Authentication & Permissions
+permissions:
+  access_mode: user
+  requested_oauth_scopes:
+    - workspace-access
+    - databricks-sql-access
+    - genie-space-management
+
+# Application startup command
+command:
+  - python
+  - app.py
+
+# Environment variables
+env:
+  # Genie Space ID for the AI assistant
+  - name: SPACE_ID
+    value: "01f032a141211caa98dd84fde5f99b91"
+  
+  # Databricks workspace host (auto-injected by platform)
+  - name: DATABRICKS_HOST
+    valueFrom: workspace-host
+  
+  # Serving endpoint for LLM insights generation (auto-injected)
+  - name: SERVING_ENDPOINT_NAME
+    valueFrom: serving-endpoint
+  
+  # PostgreSQL database for event logging
+  - name: DB_HOST
+    value: "instance-debc5f01-b417-48cc-9946-644617771b6f.database.azuredatabricks.net"
+  - name: DB_NAME
+    value: "databricks_postgres"
+  - name: DB_USER
+    value: "kejria01@heiway.net"
+  - name: DB_PASSWORD
+    valueFrom: secret/db_password  # OAuth token for Lakehouse PostgreSQL
+  - name: DB_PORT
+    value: "5432"

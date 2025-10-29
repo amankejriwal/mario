@@ -1,0 +1,23 @@
+/* Feedback buttons styling - Original look */
+.thumbs-up-button,
+.thumbs-down-button {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 4px 8px;
+    margin: 0 2px;
+    opacity: 1;
+    transition: filter 0.2s ease;
+    position: relative;
+    z-index: 10;
+}
+
+
+/* Message actions container */
+.message-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+    position: relative;
+    z-index: 1;
+}
