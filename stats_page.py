@@ -98,6 +98,25 @@ def create_stats_layout():
             html.Div(id="popular-questions-list")
         ], className="stats-section"),
         
+        # SQL Usage Analytics
+        html.Div([
+            html.H2("🗄️ SQL Usage Analytics", className="section-title"),
+            html.P("Analysis of tables and columns accessed by users", className="section-subtitle"),
+            dbc.Row([
+                dbc.Col([
+                    dcc.Graph(id='table-usage-chart', config={'displayModeBar': False})
+                ], width=6),
+                dbc.Col([
+                    dcc.Graph(id='column-usage-chart', config={'displayModeBar': False})
+                ], width=6)
+            ]),
+            dbc.Row([
+                dbc.Col([
+                    html.Div(id="table-column-details")
+                ], width=12)
+            ])
+        ], className="stats-section"),
+        
         # User Retention
         html.Div([
             html.H2("🔄 User Retention", className="section-title"),
@@ -351,3 +370,167 @@ def create_conversation_trends_chart(engagement_data: Dict[str, Any]):
     )
     
     return fig
+
+
+def parse_sql_tables_and_columns(sql_query: str) -> Dict[str, Any]:
+    """
+    Parse SQL query to extract table and column names.
+    Returns dict with 'tables' and 'columns' lists.
+    """
+    import re
+    
+    tables = []
+    columns = []
+    
+    if not sql_query:
+        return {'tables': [], 'columns': []}
+    
+    # Clean up the SQL
+    sql_clean = sql_query.upper()
+    
+    # Extract table names from FROM and JOIN clauses
+    # Pattern: FROM/JOIN schema.table or FROM/JOIN table
+    from_pattern = r'(?:FROM|JOIN)\s+(?:`)?([a-zA-Z0-9_]+\.)?([a-zA-Z0-9_]+\.)?([a-zA-Z0-9_]+)(?:`)?'
+    matches = re.findall(from_pattern, sql_clean)
+    for match in matches:
+        # match is tuple of (catalog, schema, table) or variations
+        table_parts = [p for p in match if p and p != '.']
+        if table_parts:
+            full_table = '.'.join(table_parts).lower()
+            if full_table not in tables:
+                tables.append(full_table)
+    
+    # Extract column names from SELECT clause
+    # Simple approach: get words between SELECT and FROM
+    select_pattern = r'SELECT\s+(.*?)\s+FROM'
+    select_match = re.search(select_pattern, sql_clean, re.DOTALL)
+    if select_match:
+        select_clause = select_match.group(1)
+        # Split by comma and extract column names
+        parts = select_clause.split(',')
+        for part in parts:
+            # Remove AS aliases, functions, etc.
+            part = part.strip()
+            # Extract column name (simple approach)
+            col_match = re.search(r'(?:`)?([a-zA-Z0-9_]+)(?:`)?(?:\s+AS)?', part)
+            if col_match:
+                col_name = col_match.group(1).lower()
+                # Skip SQL keywords
+                if col_name not in ['as', 'from', 'where', 'select', 'distinct', 'count', 'sum', 'avg', 'max', 'min', 'case', 'when', 'then', 'else', 'end']:
+                    if col_name not in columns:
+                        columns.append(col_name)
+    
+    return {'tables': tables, 'columns': columns}
+
+
+def create_table_usage_chart(table_data: list):
+    """Create chart showing most frequently queried tables"""
+    if not table_data:
+        fig = go.Figure()
+        fig.add_annotation(text="No table usage data available", showarrow=False)
+        fig.update_layout(height=300)
+        return fig
+    
+    # Sort by count and take top 10
+    sorted_tables = sorted(table_data, key=lambda x: x['count'], reverse=True)[:10]
+    
+    table_names = [t['table_name'] for t in sorted_tables]
+    counts = [t['count'] for t in sorted_tables]
+    
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        y=table_names,
+        x=counts,
+        orientation='h',
+        marker_color='#3b82f6',
+        text=counts,
+        textposition='auto'
+    ))
+    
+    fig.update_layout(
+        title="Top 10 Most Queried Tables",
+        xaxis_title="Number of Queries",
+        yaxis_title="Table Name",
+        template='plotly_white',
+        height=400,
+        margin=dict(l=200, r=20, t=40, b=40)
+    )
+    
+    return fig
+
+
+def create_column_usage_chart(column_data: list):
+    """Create chart showing most frequently accessed columns"""
+    if not column_data:
+        fig = go.Figure()
+        fig.add_annotation(text="No column usage data available", showarrow=False)
+        fig.update_layout(height=300)
+        return fig
+    
+    # Sort by count and take top 15
+    sorted_columns = sorted(column_data, key=lambda x: x['count'], reverse=True)[:15]
+    
+    column_names = [c['column_name'] for c in sorted_columns]
+    counts = [c['count'] for c in sorted_columns]
+    
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        y=column_names,
+        x=counts,
+        orientation='h',
+        marker_color='#8b5cf6',
+        text=counts,
+        textposition='auto'
+    ))
+    
+    fig.update_layout(
+        title="Top 15 Most Used Columns",
+        xaxis_title="Number of Queries",
+        yaxis_title="Column Name",
+        template='plotly_white',
+        height=500,
+        margin=dict(l=150, r=20, t=40, b=40)
+    )
+    
+    return fig
+
+
+def create_table_column_details(table_column_data: list):
+    """Create detailed breakdown of tables and their columns"""
+    if not table_column_data:
+        return html.P("No data available", className="no-data-message")
+    
+    # Group by table
+    from collections import defaultdict
+    table_columns = defaultdict(list)
+    
+    for item in table_column_data:
+        table_columns[item['table_name']].append({
+            'column': item['column_name'],
+            'count': item['count']
+        })
+    
+    # Sort tables by total queries
+    sorted_tables = sorted(table_columns.items(), key=lambda x: sum(c['count'] for c in x[1]), reverse=True)[:5]
+    
+    details = []
+    for table_name, columns in sorted_tables:
+        total_queries = sum(c['count'] for c in columns)
+        sorted_cols = sorted(columns, key=lambda x: x['count'], reverse=True)[:10]
+        
+        col_list = [
+            html.Li([
+                html.Span(f"{col['column']}", style={'fontWeight': 'bold'}),
+                html.Span(f" ({col['count']}x)", style={'color': '#666', 'marginLeft': '8px'})
+            ]) for col in sorted_cols
+        ]
+        
+        details.append(
+            html.Div([
+                html.H4(f"📊 {table_name}", style={'color': '#3b82f6', 'marginBottom': '8px'}),
+                html.P(f"Total queries: {total_queries}", style={'color': '#666', 'fontSize': '13px', 'marginBottom': '12px'}),
+                html.Ul(col_list, style={'marginBottom': '24px'})
+            ])
+        )
+    
+    return html.Div(details, style={'marginTop': '20px'})

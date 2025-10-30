@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 import sqlparse
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.serving import ChatMessage, ChatMessageRole
-from event_logger import log_page_visit, log_feedback, generate_session_id, update_session, get_user_conversations, get_conversation_messages
+from event_logger import log_page_visit, log_feedback, generate_session_id, update_session, get_user_conversations, get_conversation_messages, get_user_favorites, delete_user_favorite
 from stats_page import create_stats_layout
 import stats_queries
 
@@ -77,24 +77,24 @@ def get_chat_layout():
     return html.Div([
     # Top navigation bar
     html.Div([
-        # Left component containing both nav-left and sidebar
+        # Hamburger toggle button (top-left)
+        html.Button([
+            html.Div([
+                html.Div(className="hamburger-line"),
+                html.Div(className="hamburger-line"),
+                html.Div(className="hamburger-line")
+            ], className="hamburger-icon")
+        ], id="sidebar-toggle", className="sidebar-toggle-button", title="Toggle Favorites"),
+        
+        # Favorites sidebar
         html.Div([
-            # Nav left
             html.Div([
-       #         html.Button([
-        #            html.Img(src="assets/plus_icon.svg", className="new-chat-icon"),
-         #           html.Div("New chat", className="new-chat-text")
-          #      ], id="sidebar-new-chat-button", className="new-chat-button",disabled=False)
-            ], id="nav-left", className="nav-left"),
-            
-            # Sidebar
-            html.Div([
-                html.Div([
-                    html.Div("Your conversations with Mario", className="sidebar-header-text"),
-                ], className="sidebar-header"),
-                html.Div([], className="chat-list", id="chat-list")
-            ], id="sidebar", className="sidebar")
-        ], id="left-component", className="left-component"),
+                html.Div("My Favorites", className="sidebar-header-text"),
+            ], className="sidebar-header"),
+            html.Div([], className="favorites-list", id="favorites-list"),
+            # Resize handle
+            html.Div(className="sidebar-resize-handle", id="sidebar-resize-handle")
+        ], id="sidebar", className="sidebar", style={'width': '0px'}),
         
         html.Div([
             html.Div("", id="logo-container", className="logo-container")
@@ -298,7 +298,9 @@ def get_chat_layout():
     dcc.Store(id="query-running-store", data=False),
     dcc.Store(id="session-store", data={"current_session": None}),
     dcc.Store(id="page-visit-logged", data=False),  # Track if page visit was logged
-    dcc.Store(id="export-clicks-tracker", data={})  # Track processed export clicks
+    dcc.Store(id="export-clicks-tracker", data={}),  # Track processed export clicks
+    dcc.Store(id="favorites-store", data=[]),  # Store user favorites
+    dcc.Store(id="sidebar-state", data={"open": False, "width": 250})  # Sidebar state
     ])
 
 # Define the app layout with URL routing
@@ -363,71 +365,103 @@ def log_page_visit_event(logged):
                 logger.warning(f"Failed to log page visit: {e}")
     return logged if logged else False
 
-# Callback to load conversations on page load (sidebar always visible)
+# Callback to load favorites on page load
 @app.callback(
-    [Output("chat-history-store", "data", allow_duplicate=True),
-     Output("chat-list", "children", allow_duplicate=True)],
+    Output("favorites-store", "data"),
     Input("page-visit-logged", "data"),
-    State("chat-history-store", "data"),
-    prevent_initial_call=True
-)
-def load_conversations_on_page_load(logged, current_history):
-    """Load user's conversations from database on page load"""
-    # Only load if we haven't loaded yet (empty history) and page visit is logged
-    if logged and not current_history:
-        user_info = get_user_from_request()
-        if user_info:
-            try:
-                conversations = get_user_conversations(user_info['user_id'], limit=50)
-                logger.info(f"📚 Loaded {len(conversations)} conversations for user {user_info['user_id']}")
-                
-                # Format conversations for chat-history-store
-                chat_history = [{
-                    'conversation_id': conv['conversation_id'],
-                    'title': conv['first_question'][:50] + '...' if len(conv['first_question']) > 50 else conv['first_question'],
-                    'messages': [],
-                    'last_activity': conv['last_activity'],
-                    'message_count': conv['message_count']
-                } for conv in conversations]
-                
-                # Create sidebar items
-                chat_items = []
-                for idx, chat in enumerate(chat_history):
-                    chat_items.append(
-                        html.Button(
-                            chat.get('title', 'New conversation'),
-                            id={"type": "chat-item", "index": idx},
-                            className="chat-item"
-                        )
-                    )
-                
-                return chat_history, chat_items
-            except Exception as e:
-                logger.warning(f"Failed to load conversations: {e}")
-    
-    return no_update, no_update
-
-# Callback to update sidebar when conversations are loaded from database
-@app.callback(
-    Output("chat-list", "children"),
-    Input("chat-history-store", "data"),
     prevent_initial_call=False
 )
-def update_sidebar_from_history(chat_history):
-    """Update sidebar with conversations from database"""
-    if not chat_history:
-        return []
+def load_favorites_on_page_load(logged):
+    """Load user's favorites from database on page load"""
+    # Always attempt to load favorites, regardless of logged status
+    user_info = get_user_from_request()
     
-    chat_items = []
-    for idx, chat in enumerate(chat_history):
-        chat_items.append(
-            html.Button(
-                chat.get('title', 'New conversation'),
-                id={"type": "chat-item", "index": idx},
-                className="chat-item"
-            )
+    # Fallback for local development without auth headers
+    if not user_info:
+        user_info = {
+            'user_id': 'local_dev_user',
+            'user_email': 'dev@localhost',
+            'user_name': 'Local Developer'
+        }
+    
+    try:
+        favorites = get_user_favorites(user_info['user_id'])
+        logger.info(f"⭐ Loaded {len(favorites)} favorites for user {user_info['user_id']}")
+        return favorites
+    except Exception as e:
+        logger.warning(f"Failed to load favorites: {e}")
+        import traceback
+        logger.warning(traceback.format_exc())
+    
+    return []
+
+# Callback to update favorites list in sidebar
+@app.callback(
+    Output("favorites-list", "children"),
+    Input("favorites-store", "data"),
+    prevent_initial_call=False
+)
+def update_favorites_list(favorites):
+    """Update sidebar with user's favorites"""
+    if not favorites:
+        return html.Div("No favorites yet", style={'padding': '20px', 'textAlign': 'center', 'color': '#999', 'fontSize': '13px'})
+    
+    favorite_items = []
+    for fav in favorites:
+        favorite_items.append(
+            html.Div([
+                html.Button(
+                    fav['question'],
+                    id={"type": "favorite-item", "index": fav['id']},
+                    className="favorite-item"
+                ),
+                # Delete button (shown initially)
+                html.Button(
+                    "Delete",
+                    id={"type": "favorite-delete", "index": fav['id']},
+                    className="favorite-delete-btn",
+                    title="Delete favorite"
+                ),
+                # Confirm/Cancel buttons (shown after delete is clicked)
+                html.Div([
+                    html.Button(
+                        "✓",
+                        id={"type": "favorite-confirm-yes", "index": fav['id']},
+                        className="favorite-confirm-btn favorite-confirm-yes",
+                        title="Confirm delete"
+                    ),
+                    html.Button(
+                        "✗",
+                        id={"type": "favorite-confirm-no", "index": fav['id']},
+                        className="favorite-confirm-btn favorite-confirm-no",
+                        title="Cancel"
+                    )
+                ], id={"type": "favorite-confirm-container", "index": fav['id']},
+                   className="favorite-confirm-container",
+                   style={"display": "none"})  # Hidden initially
+            ], className="favorite-item-container")
         )
-    return chat_items
+    return favorite_items
+
+# Callback to toggle sidebar open/close
+@app.callback(
+    Output("sidebar", "style"),
+    Output("sidebar-state", "data"),
+    Input("sidebar-toggle", "n_clicks"),
+    State("sidebar-state", "data"),
+    prevent_initial_call=True
+)
+def toggle_sidebar(n_clicks, sidebar_state):
+    """Toggle sidebar open/closed"""
+    if n_clicks:
+        is_open = sidebar_state.get('open', False)
+        new_width = 0 if is_open else sidebar_state.get('width', 250)
+        
+        return (
+            {'width': f'{new_width}px'},
+            {'open': not is_open, 'width': sidebar_state.get('width', 250)}
+        )
+    return no_update, no_update
 
 def format_sql_query(sql_query):
     """Format SQL query with syntax highlighting"""
@@ -1152,6 +1186,14 @@ def get_model_response(trigger_data, current_messages, chat_history, conversatio
         
         # Get user info from request headers for event logging
         user_info = get_user_from_request()
+        
+        # Fallback for local development without auth headers
+        if not user_info:
+            user_info = {
+                'user_id': 'local_dev_user',
+                'user_email': 'dev@localhost',
+                'user_name': 'Local Developer'
+            }
         
         # Make the API call with user-specific authentication and event logging
         response, query_text, new_conversation_id = genie_query(user_input, conversation_id, token_minter, user_info)
@@ -2393,6 +2435,7 @@ def save_favorite_to_db(n_clicks, question, sql_query):
     
     if success:
         logger.info("✅ Favorite saved successfully, showing toast with close button")
+        
         # Show success toast (with flex display for button alignment), hide favorites section, fill star
         return (
             {"display": "flex", "backgroundColor": "#FFF4CC", "color": "#000", "padding": "12px 16px", 
@@ -2405,6 +2448,37 @@ def save_favorite_to_db(n_clicks, question, sql_query):
         logger.error("Failed to save favorite")
         return no_update, no_update, no_update
 
+# Callback to refresh favorites after saving
+@app.callback(
+    Output("favorites-store", "data", allow_duplicate=True),
+    Input({"type": "success-toast", "index": ALL}, "style"),
+    prevent_initial_call=True
+)
+def refresh_favorites_after_save(toast_styles):
+    """Refresh favorites list when a success toast is shown"""
+    ctx = dash.callback_context
+    if not ctx.triggered:
+        return no_update
+    
+    # Check if any toast was just shown (display: flex)
+    for style in toast_styles:
+        if style and style.get("display") == "flex":
+            user_info = get_user_from_request()
+            
+            # Fallback for local development
+            if not user_info:
+                user_info = {
+                    'user_id': 'local_dev_user',
+                    'user_email': 'dev@localhost',
+                    'user_name': 'Local Developer'
+                }
+            
+            updated_favorites = get_user_favorites(user_info.get("user_id"))
+            logger.info(f"🔄 Refreshed favorites list: {len(updated_favorites)} items")
+            return updated_favorites
+    
+    return no_update
+
 # Callback to hide success toast when close button is clicked
 @app.callback(
     Output({"type": "success-toast", "index": MATCH}, "style", allow_duplicate=True),
@@ -2414,6 +2488,164 @@ def save_favorite_to_db(n_clicks, question, sql_query):
 def close_success_toast(n_clicks):
     if n_clicks:
         return {"display": "none"}
+    return no_update
+
+# Callback to handle clicking a favorite (add to chat)
+@app.callback(
+    [Output("chat-messages", "children", allow_duplicate=True),
+     Output("chat-input-fixed", "value", allow_duplicate=True),
+     Output("welcome-container", "className", allow_duplicate=True),
+     Output("chat-trigger", "data", allow_duplicate=True),
+     Output("query-running-store", "data", allow_duplicate=True),
+     Output("chat-history-store", "data", allow_duplicate=True),
+     Output("session-store", "data", allow_duplicate=True)],
+    Input({"type": "favorite-item", "index": ALL}, "n_clicks"),
+    [State("favorites-store", "data"),
+     State("chat-messages", "children"),
+     State("welcome-container", "className"),
+     State("chat-history-store", "data"),
+     State("session-store", "data")],
+    prevent_initial_call=True
+)
+def click_favorite(n_clicks_list, favorites, current_messages, welcome_class, chat_history, session_data):
+    """When a favorite is clicked, add it to chat and trigger response (same as suggestion buttons)"""
+    if not any(n_clicks_list) or not favorites:
+        return [no_update] * 7
+    
+    ctx = dash.callback_context
+    if not ctx.triggered:
+        return [no_update] * 7
+    
+    # Get which favorite was clicked
+    trigger_id = ctx.triggered[0]["prop_id"].split(".")[0]
+    trigger_dict = json.loads(trigger_id)
+    favorite_id = trigger_dict["index"]
+    
+    # Find the favorite
+    favorite = next((f for f in favorites if f['id'] == favorite_id), None)
+    if not favorite:
+        return [no_update] * 7
+    
+    user_input = favorite['question']
+    logger.info(f"⭐ Clicked favorite: {user_input}")
+    
+    # Create user message
+    user_message = html.Div([
+        html.Div(user_input, className="message-text")
+    ], className="user-message message")
+    
+    # Add the user message to the chat
+    updated_messages = current_messages + [user_message] if current_messages else [user_message]
+    
+    # Add thinking indicator
+    thinking_indicator = html.Div([
+        html.Div([
+            html.Span(className="spinner"),
+            html.Span("Thinking...")
+        ], className="thinking-indicator")
+    ], className="bot-message message")
+    
+    updated_messages.append(thinking_indicator)
+    
+    # Handle session management
+    if session_data["current_session"] is None:
+        session_data = {"current_session": len(chat_history) if chat_history else 0}
+    
+    current_session = session_data["current_session"]
+    
+    # Update chat history
+    if chat_history is None:
+        chat_history = []
+    
+    if current_session < len(chat_history):
+        # Update existing conversation
+        chat_history[current_session]["messages"] = updated_messages
+        # Update title if this is first message in conversation
+        if not chat_history[current_session].get("title") or chat_history[current_session].get("title") == "New conversation":
+            chat_history[current_session]["title"] = user_input[:50] + '...' if len(user_input) > 50 else user_input
+    else:
+        # Create new conversation with standardized structure
+        chat_history.insert(0, {
+            "conversation_id": None,  # Will be set after API response
+            "title": user_input[:50] + '...' if len(user_input) > 50 else user_input,
+            "messages": updated_messages,
+            "message_count": 1
+        })
+    
+    return (
+        updated_messages,
+        "",  # Clear input field
+        "welcome-container hidden",  # Hide welcome
+        {"trigger": True, "message": user_input},  # Trigger bot response
+        True,  # Set query running
+        chat_history,  # Update chat history
+        session_data  # Update session
+    )
+
+# Callback to handle delete button click (show confirm buttons)
+@app.callback(
+    Output({"type": "favorite-delete", "index": MATCH}, "style"),
+    Output({"type": "favorite-confirm-container", "index": MATCH}, "style"),
+    Input({"type": "favorite-delete", "index": MATCH}, "n_clicks"),
+    prevent_initial_call=True
+)
+def show_confirm_buttons(n_clicks):
+    """Hide delete button and show confirm/cancel buttons"""
+    if n_clicks:
+        return {"display": "none"}, {"display": "flex"}
+    return no_update, no_update
+
+# Callback to handle cancel button (hide confirm, show delete)
+@app.callback(
+    Output({"type": "favorite-delete", "index": MATCH}, "style", allow_duplicate=True),
+    Output({"type": "favorite-confirm-container", "index": MATCH}, "style", allow_duplicate=True),
+    Input({"type": "favorite-confirm-no", "index": MATCH}, "n_clicks"),
+    prevent_initial_call=True
+)
+def cancel_delete(n_clicks):
+    """Hide confirm buttons and show delete button again"""
+    if n_clicks:
+        return {"display": "flex"}, {"display": "none"}
+    return no_update, no_update
+
+# Callback to actually delete the favorite when confirmed
+@app.callback(
+    Output("favorites-store", "data", allow_duplicate=True),
+    Input({"type": "favorite-confirm-yes", "index": ALL}, "n_clicks"),
+    State("favorites-store", "data"),
+    prevent_initial_call=True
+)
+def delete_favorite(n_clicks_list, favorites):
+    """Delete favorite when confirm (tick) button is clicked"""
+    if not any(n_clicks_list) or not favorites:
+        return no_update
+    
+    ctx = dash.callback_context
+    if not ctx.triggered:
+        return no_update
+    
+    # Get which confirm button was clicked
+    trigger_id = ctx.triggered[0]["prop_id"].split(".")[0]
+    trigger_dict = json.loads(trigger_id)
+    favorite_id = trigger_dict["index"]
+    
+    user_info = get_user_from_request()
+    
+    # Fallback for local development
+    if not user_info:
+        user_info = {
+            'user_id': 'local_dev_user',
+            'user_email': 'dev@localhost',
+            'user_name': 'Local Developer'
+        }
+    
+    success = delete_user_favorite(favorite_id, user_info['user_id'])
+    if success:
+        logger.info(f"🗑️ Deleted favorite {favorite_id}")
+        # Remove from favorites list
+        updated_favorites = [f for f in favorites if f['id'] != favorite_id]
+        return updated_favorites
+    
     return no_update
 
 # ============================================================================
@@ -2558,6 +2790,67 @@ def update_retention_chart(trigger):
     except Exception as e:
         logger.error(f"Error updating retention chart: {e}")
         return {}
+
+# Callbacks for SQL Usage Analytics
+@app.callback(
+    Output('table-usage-chart', 'figure'),
+    [Input('stats-refresh-trigger', 'data'),
+     Input('stats-time-filter', 'value')]
+)
+def update_table_usage_chart(trigger, time_filter):
+    try:
+        from event_logger import get_sql_usage_analytics
+        from stats_page import create_table_usage_chart
+        
+        # Map time filter to days
+        days_map = {'7d': 7, '30d': 30, '90d': 90, 'all': 0}
+        days = days_map.get(time_filter, 30)
+        
+        analytics = get_sql_usage_analytics(days)
+        return create_table_usage_chart(analytics['tables'])
+    except Exception as e:
+        logger.error(f"Error updating table usage chart: {e}")
+        return {}
+
+@app.callback(
+    Output('column-usage-chart', 'figure'),
+    [Input('stats-refresh-trigger', 'data'),
+     Input('stats-time-filter', 'value')]
+)
+def update_column_usage_chart(trigger, time_filter):
+    try:
+        from event_logger import get_sql_usage_analytics
+        from stats_page import create_column_usage_chart
+        
+        # Map time filter to days
+        days_map = {'7d': 7, '30d': 30, '90d': 90, 'all': 0}
+        days = days_map.get(time_filter, 30)
+        
+        analytics = get_sql_usage_analytics(days)
+        return create_column_usage_chart(analytics['columns'])
+    except Exception as e:
+        logger.error(f"Error updating column usage chart: {e}")
+        return {}
+
+@app.callback(
+    Output('table-column-details', 'children'),
+    [Input('stats-refresh-trigger', 'data'),
+     Input('stats-time-filter', 'value')]
+)
+def update_table_column_details(trigger, time_filter):
+    try:
+        from event_logger import get_sql_usage_analytics
+        from stats_page import create_table_column_details
+        
+        # Map time filter to days
+        days_map = {'7d': 7, '30d': 30, '90d': 90, 'all': 0}
+        days = days_map.get(time_filter, 30)
+        
+        analytics = get_sql_usage_analytics(days)
+        return create_table_column_details(analytics['table_columns'])
+    except Exception as e:
+        logger.error(f"Error updating table column details: {e}")
+        return html.P("Error loading data")
 
 # Callback to handle export button clicks
 @app.callback(

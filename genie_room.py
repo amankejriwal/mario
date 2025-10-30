@@ -13,7 +13,7 @@ from databricks.sdk.core import DatabricksError
 import uuid
 from token_minter import TokenMinter, get_user_token_minter
 from dotenv import load_dotenv
-from event_logger import log_start_conversation, log_send_message
+from event_logger import log_start_conversation, log_send_message, log_sql_response
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -217,6 +217,23 @@ def start_new_conversation(question: str, token_minter: TokenMinter = None, user
 
         complete_message = client.wait_for_message_completion(conversation_id, message_id)
         result, query_text = process_genie_response(client, conversation_id, message_id, complete_message)
+        
+        # Log SQL response if query was returned
+        if query_text and user_info:
+            try:
+                log_sql_response(
+                    user_id=user_info['user_id'],
+                    conversation_id=conversation_id,
+                    message_id=message_id,
+                    question=question,
+                    sql_query=query_text,
+                    user_email=user_info.get('user_email'),
+                    user_name=user_info.get('user_name')
+                )
+                logger.info(f"✅ Logged SQL response for message {message_id}")
+            except Exception as log_err:
+                logger.warning(f"Failed to log SQL response: {log_err}")
+        
         return conversation_id, result, query_text
 
     except Exception as e:
@@ -251,6 +268,23 @@ def continue_conversation(conversation_id: str, question: str, token_minter: Tok
 
         complete_message = client.wait_for_message_completion(conversation_id, message_id)
         result, query_text = process_genie_response(client, conversation_id, message_id, complete_message)
+        
+        # Log SQL response if query was returned
+        if query_text and user_info:
+            try:
+                log_sql_response(
+                    user_id=user_info['user_id'],
+                    conversation_id=conversation_id,
+                    message_id=message_id,
+                    question=question,
+                    sql_query=query_text,
+                    user_email=user_info.get('user_email'),
+                    user_name=user_info.get('user_name')
+                )
+                logger.info(f"✅ Logged SQL response for message {message_id}")
+            except Exception as log_err:
+                logger.warning(f"Failed to log SQL response: {log_err}")
+        
         return result, query_text
 
     except Exception as e:

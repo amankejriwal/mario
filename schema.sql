@@ -4,7 +4,7 @@
 -- Table 1: user_events - Immutable event log for all user actions
 CREATE TABLE IF NOT EXISTS user_events (
     event_id SERIAL PRIMARY KEY,
-    event_type VARCHAR(50) NOT NULL,  -- 'page_visit', 'start_conversation', 'send_message', 'feedback'
+    event_type VARCHAR(50) NOT NULL,  -- 'page_visit', 'start_conversation', 'send_message', 'sql_response', 'feedback'
     user_id VARCHAR(255) NOT NULL,
     user_email VARCHAR(255),
     user_name VARCHAR(255),
@@ -51,6 +51,7 @@ SELECT
     COUNT(*) FILTER (WHERE event_type = 'page_visit') as page_visits,
     COUNT(*) FILTER (WHERE event_type = 'start_conversation') as conversations_started,
     COUNT(*) FILTER (WHERE event_type = 'send_message') as messages_sent,
+    COUNT(*) FILTER (WHERE event_type = 'sql_response') as sql_queries_returned,
     COUNT(*) FILTER (WHERE event_type = 'feedback' AND feedback_type = 'positive') as positive_feedback,
     COUNT(*) FILTER (WHERE event_type = 'feedback' AND feedback_type = 'negative') as negative_feedback
 FROM user_events

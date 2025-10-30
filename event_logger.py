@@ -214,6 +214,33 @@ def log_send_message(
     )
 
 
+def log_sql_response(
+    user_id: str,
+    conversation_id: str,
+    message_id: str,
+    question: str,
+    sql_query: str,
+    user_email: Optional[str] = None,
+    user_name: Optional[str] = None,
+    session_id: Optional[str] = None
+) -> bool:
+    """Log SQL query returned by Genie API"""
+    metadata = {
+        "question": question,
+        "sql_query": sql_query
+    }
+    return log_event(
+        event_type='sql_response',
+        user_id=user_id,
+        user_email=user_email,
+        user_name=user_name,
+        conversation_id=conversation_id,
+        message_id=message_id,
+        session_id=session_id,
+        metadata=metadata
+    )
+
+
 def log_feedback(
     user_id: str,
     conversation_id: str,
@@ -534,6 +561,153 @@ def save_favorite(
         return False
     except Exception as e:
         logger.error(f"Failed to save favorite: {e}")
+        return False
+
+
+def get_sql_usage_analytics(days: int = 30) -> Dict[str, Any]:
+    """
+    Analyze SQL queries to extract table and column usage statistics.
+    
+    Args:
+        days: Number of days to look back (0 for all time)
+    
+    Returns:
+        Dict with 'tables', 'columns', and 'table_columns' analytics
+    """
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                # Build date filter
+                date_filter = ""
+                if days > 0:
+                    date_filter = f"AND timestamp >= NOW() - INTERVAL '{days} days'"
+                
+                # Get all SQL queries
+                cur.execute(f"""
+                    SELECT 
+                        metadata->>'sql_query' as sql_query
+                    FROM user_events
+                    WHERE event_type = 'sql_response'
+                      AND metadata->>'sql_query' IS NOT NULL
+                      {date_filter}
+                """)
+                
+                results = cur.fetchall()
+                
+                # Parse all SQL queries and aggregate
+                from collections import Counter
+                table_counter = Counter()
+                column_counter = Counter()
+                table_column_counter = Counter()
+                
+                # Import the parsing function
+                from stats_page import parse_sql_tables_and_columns
+                
+                for row in results:
+                    sql_query = row[0]
+                    if sql_query:
+                        parsed = parse_sql_tables_and_columns(sql_query)
+                        
+                        # Count tables
+                        for table in parsed['tables']:
+                            table_counter[table] += 1
+                            
+                            # Count table-column pairs
+                            for column in parsed['columns']:
+                                table_column_counter[(table, column)] += 1
+                        
+                        # Count columns globally
+                        for column in parsed['columns']:
+                            column_counter[column] += 1
+                
+                # Format results
+                tables = [{'table_name': table, 'count': count} 
+                         for table, count in table_counter.items()]
+                
+                columns = [{'column_name': col, 'count': count} 
+                          for col, count in column_counter.items()]
+                
+                table_columns = [{'table_name': table, 'column_name': col, 'count': count} 
+                                for (table, col), count in table_column_counter.items()]
+                
+                return {
+                    'tables': tables,
+                    'columns': columns,
+                    'table_columns': table_columns
+                }
+                
+    except ValueError as ve:
+        logger.debug(f"SQL analytics unavailable (no DB credentials): {ve}")
+        return {'tables': [], 'columns': [], 'table_columns': []}
+    except Exception as e:
+        logger.warning(f"Failed to get SQL usage analytics: {e}")
+        return {'tables': [], 'columns': [], 'table_columns': []}
+
+
+def get_user_favorites(user_id: str) -> List[Dict[str, Any]]:
+    """
+    Get all favorites for a user, sorted by newest first.
+    
+    Args:
+        user_id: User identifier
+    
+    Returns:
+        List of favorites with question, sql_query, and metadata
+    """
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT 
+                        id,
+                        question,
+                        sql_query,
+                        created_at
+                    FROM user_favorites
+                    WHERE user_id = %s
+                    ORDER BY created_at DESC
+                """, (user_id,))
+                
+                results = cur.fetchall()
+                return [{
+                    'id': row[0],
+                    'question': row[1],
+                    'sql_query': row[2],
+                    'created_at': row[3].isoformat() if row[3] else None
+                } for row in results]
+    except ValueError as ve:
+        logger.debug(f"Favorites unavailable (no DB credentials): {ve}")
+        return []
+    except Exception as e:
+        logger.warning(f"Failed to fetch user favorites: {e}")
+        return []
+
+
+def delete_user_favorite(favorite_id: int, user_id: str) -> bool:
+    """
+    Delete a specific favorite for a user.
+    
+    Args:
+        favorite_id: ID of the favorite to delete
+        user_id: User identifier (for security check)
+    
+    Returns:
+        bool: True if deleted successfully, False otherwise
+    """
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    DELETE FROM user_favorites
+                    WHERE id = %s AND user_id = %s
+                """, (favorite_id, user_id))
+        logger.debug(f"✅ Deleted favorite {favorite_id} for user {user_id}")
+        return True
+    except ValueError as ve:
+        logger.debug(f"Favorite delete unavailable (no DB credentials): {ve}")
+        return False
+    except Exception as e:
+        logger.error(f"Failed to delete favorite: {e}")
         return False
 
 
