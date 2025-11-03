@@ -27,6 +27,13 @@ body {
 
 }
 
+/* Download Chart Button */
+.download-chart-button:hover {
+    background-color: #f3f4f6 !important;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15) !important;
+}
+
 /* Top navigation */
 .top-nav {
     display: flex;
@@ -1172,6 +1179,52 @@ input:disabled, button:disabled {
 /* Hide default DataTable export button */
 .dash-table-container .export {
     display: none !important;
+}
+
+/* Enable text selection in DataTable cells - FORCE OVERRIDE ALL DASH DEFAULTS */
+.dash-table-container,
+.dash-table-container *,
+.dash-table-container table,
+.dash-table-container table *,
+.dash-table-container tbody,
+.dash-table-container tbody *,
+.dash-table-container tbody td,
+.dash-table-container tbody td *,
+.dash-table-container tbody tr,
+.dash-table-container tbody tr *,
+.dash-table-container thead,
+.dash-table-container thead *,
+.dash-table-container th,
+.dash-table-container th *,
+.dash-spreadsheet,
+.dash-spreadsheet *,
+.dash-spreadsheet-inner,
+.dash-spreadsheet-inner *,
+.dash-spreadsheet-inner td,
+.dash-spreadsheet-inner td *,
+.dash-spreadsheet-inner th,
+.dash-spreadsheet-inner th *,
+.dash-cell,
+.dash-cell *,
+.dash-cell-value,
+.dash-cell-value *,
+div[role="grid"],
+div[role="grid"] *,
+div[role="gridcell"],
+div[role="gridcell"] *,
+div[role="row"],
+div[role="row"] *,
+td[role="gridcell"],
+td[role="gridcell"] *,
+th[role="columnheader"],
+th[role="columnheader"] * {
+    user-select: text !important;
+    -webkit-user-select: text !important;
+    -moz-user-select: text !important;
+    -ms-user-select: text !important;
+    -khtml-user-select: text !important;
+    cursor: text !important;
+    pointer-events: auto !important;
 }
 
 .sql-code {

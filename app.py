@@ -1306,6 +1306,9 @@ def get_model_response(trigger_data, current_messages, chat_history, conversatio
                 export_format="csv",
                 export_headers="display",
                 
+                # Disable editing to allow text selection
+                editable=False,
+                
                 # Other table properties
                 page_size=10,
                 style_table={
@@ -1323,12 +1326,14 @@ def get_model_response(trigger_data, current_messages, chat_history, conversatio
                     'fontFamily': '-apple-system, BlinkMacSystemFont,Segoe UI, Roboto, Helvetica Neue, Arial, sans-serif',
                     'backgroundColor': 'transparent',
                     'maxWidth': 'fit-content',
-                    'minWidth': '100px'
+                    'minWidth': '100px',
+                    'cursor': 'text'
                 },
                 style_header={
                     'backgroundColor': '#f8f9fa',
                     'fontWeight': '600',
-                    'borderBottom': '1px solid #eaecef'
+                    'borderBottom': '1px solid #eaecef',
+                    'cursor': 'text'
                 },
                 style_data={
                     'whiteSpace': 'normal',
@@ -1604,17 +1609,48 @@ def get_model_response(trigger_data, current_messages, chat_history, conversatio
             if charts:
                 logger.info(f"Adding {len(charts)} chart(s) to content")
                 for idx, chart in enumerate(charts):
+                    chart_id = f"chart-{message_id}-{idx}"
                     content_items.append(
                         html.Div([
+                            html.Div([
+                                html.Button(
+                                    "📷",
+                                    id={"type": "download-chart", "index": chart_id},
+                                    className="download-chart-button",
+                                    title="Download as PNG",
+                                    style={
+                                        "position": "absolute",
+                                        "top": "8px",
+                                        "right": "8px",
+                                        "padding": "6px 10px",
+                                        "backgroundColor": "white",
+                                        "border": "1px solid #ddd",
+                                        "borderRadius": "6px",
+                                        "fontSize": "16px",
+                                        "cursor": "pointer",
+                                        "zIndex": "1000",
+                                        "boxShadow": "0 2px 4px rgba(0,0,0,0.1)",
+                                        "transition": "all 0.2s ease"
+                                    }
+                                )
+                            ], style={"position": "relative"}),
                             dcc.Graph(
+                                id=chart_id,
                                 figure=chart,
                                 config={
                                     'displayModeBar': False,
-                                    'staticPlot': False
+                                    'staticPlot': False,
+                                    'toImageButtonOptions': {
+                                        'format': 'png',
+                                        'filename': f'mario_chart_{int(time.time())}',
+                                        'height': 500,
+                                        'width': 700,
+                                        'scale': 2
+                                    }
                                 },
                                 style={'marginBottom': '16px'}
                             )
-                        ], style={'marginTop': '16px'})
+                        ], style={'marginTop': '16px', 'position': 'relative'})
                     )
             
             content = html.Div(content_items)
@@ -2908,6 +2944,74 @@ def export_table_to_csv(n_clicks_list, chat_history, clicks_tracker):
         logger.error(f"Error exporting table: {e}")
     
     return no_update, no_update
+
+
+# Clientside callback for downloading chart as PNG
+app.clientside_callback(
+    """
+    function(n_clicks, button_id) {
+        if (!n_clicks) return window.dash_clientside.no_update;
+        
+        // Extract chart ID from button ID
+        const chartId = button_id.index;
+        console.log('Button clicked for chart:', chartId);
+        
+        // Find the dcc.Graph element by ID
+        const chartElement = document.getElementById(chartId);
+        
+        if (!chartElement) {
+            console.error('Chart element not found:', chartId);
+            return window.dash_clientside.no_update;
+        }
+        
+        console.log('Chart element found:', chartElement);
+        
+        // The dcc.Graph component contains the Plotly plot
+        // Try to find the plotly div directly
+        let plotlyDiv = chartElement;
+        
+        // If chartElement is not the plotly div itself, look for it inside
+        if (!chartElement.data && !chartElement.layout) {
+            plotlyDiv = chartElement.querySelector('.js-plotly-plot');
+        }
+        
+        if (plotlyDiv && (plotlyDiv.data || plotlyDiv.layout)) {
+            const timestamp = Date.now();
+            const filename = 'mario_chart_' + timestamp;
+            
+            console.log('Downloading chart as:', filename);
+            
+            // Use Plotly's toImage to download
+            Plotly.toImage(plotlyDiv, {
+                format: 'png',
+                width: 1200,
+                height: 800,
+                filename: filename
+            }).then(function(url) {
+                // Create download link
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename + '.png';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                console.log('Download triggered');
+            }).catch(function(err) {
+                console.error('Download failed:', err);
+            });
+        } else {
+            console.error('Plotly div not found or invalid');
+        }
+        
+        return window.dash_clientside.no_update;
+    }
+    """,
+    Output({"type": "download-chart", "index": MATCH}, "n_clicks"),
+    Input({"type": "download-chart", "index": MATCH}, "n_clicks"),
+    State({"type": "download-chart", "index": MATCH}, "id"),
+    prevent_initial_call=True
+)
+
 
 if __name__ == '__main__':
     app.run_server(debug=True, host='0.0.0.0', port=8080)
